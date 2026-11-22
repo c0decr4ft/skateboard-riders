@@ -4,9 +4,9 @@ extends CharacterBody3D
 enum State { WAIT, RIDE, CRASH }
 
 const GRAVITY := 22.0
-const MAX_SPEED := 11.0
-const PUSH_TOP := 18.0
-const CRUISE := 6.4
+const MAX_SPEED := 5.0
+const PUSH_TOP := 8.5
+const CRUISE := 3.6
 
 var state: State = State.WAIT
 var spawn_pos := Vector3(0, 0.3, 4)
@@ -335,8 +335,8 @@ func _ground_physics(delta: float) -> void:
 		push_hold = maxf(push_hold - delta * 0.7, 0.0)
 	var effort := clampf(push_hold / 1.25, 0.0, 1.0)
 	if pushing and not braking:
-		var push_cap := lerpf(CRUISE + 1.5, PUSH_TOP, effort)
-		var push := lerpf(11.0, 18.0, effort)
+		var push_cap := lerpf(CRUISE, PUSH_TOP, effort)
+		var push := lerpf(5.5, 8.5, effort)
 		if speed < push_cap:
 			speed += push * delta
 	var friction := 0.7 + speed * 0.045
@@ -346,9 +346,9 @@ func _ground_physics(delta: float) -> void:
 		# Flats keep their friction. On a bank, carving should hold speed.
 		var downhill := maxf(along, 0.0)
 		var uphill := minf(along, 0.0)
-		speed += downhill * 1.65 * delta
+		speed += downhill * 0.8 * delta
 		speed += uphill * 0.32 * delta
-		speed += absf(steer) * slope * 8.0 * delta
+		speed += absf(steer) * slope * 4.0 * delta
 		friction = 0.15
 	else:
 		speed += along * delta
@@ -367,7 +367,7 @@ func _ground_physics(delta: float) -> void:
 			speed = 0.0
 	var cap := _speed_cap()
 	if slope > 0.08:
-		cap += 2.0
+		cap += 1.0
 	speed = clampf(speed, 0.0, cap)
 	velocity = fwd * speed - n * 0.35
 	var space := Input.is_physical_key_pressed(KEY_SPACE)
