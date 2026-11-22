@@ -32,6 +32,7 @@ var charge_bar: Control
 var end_title: Label
 var end_body: Label
 var best_label: Label
+var mute_button: Button
 
 
 func _ready() -> void:
@@ -63,7 +64,10 @@ func _input(event: InputEvent) -> void:
 		var key_event := event as InputEventKey
 		start = key_event.pressed and not key_event.echo
 	elif event is InputEventMouseButton:
-		start = (event as InputEventMouseButton).pressed
+		var click := event as InputEventMouseButton
+		if mute_button != null and mute_button.get_global_rect().has_point(click.position):
+			return
+		start = click.pressed
 	if start:
 		_start_run()
 		get_viewport().set_input_as_handled()
@@ -741,6 +745,48 @@ func _build_hud() -> void:
 	end_body.offset_bottom = 120
 	end_body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	end_layer.add_child(end_body)
+	_build_mute_button(layer)
+
+
+func _build_mute_button(layer: CanvasLayer) -> void:
+	mute_button = Button.new()
+	mute_button.name = "MuteButton"
+	mute_button.focus_mode = Control.FOCUS_NONE
+	mute_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	mute_button.process_mode = Node.PROCESS_MODE_ALWAYS
+	mute_button.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	mute_button.offset_left = 160
+	mute_button.offset_top = 24
+	mute_button.offset_right = 300
+	mute_button.offset_bottom = 68
+	mute_button.add_theme_font_override("font", ui_font)
+	mute_button.add_theme_font_size_override("font_size", 18)
+	mute_button.add_theme_color_override("font_color", Color(1, 1, 1))
+	mute_button.add_theme_color_override("font_hover_color", Color(1, 1, 1))
+	mute_button.add_theme_color_override("font_pressed_color", Color(1, 1, 1))
+	mute_button.pressed.connect(_toggle_mute)
+	layer.add_child(mute_button)
+	_sync_mute_button()
+
+
+func _toggle_mute() -> void:
+	Music.toggle_mute()
+	_sync_mute_button()
+
+
+func _sync_mute_button() -> void:
+	if mute_button == null:
+		return
+	var on: bool = Music.muted
+	mute_button.text = Music.mute_label()
+	var bg := Color(0.90, 0.38, 0.16) if on else Color(0.16, 0.18, 0.22)
+	var hot := Color(0.98, 0.50, 0.24) if on else Color(0.28, 0.31, 0.36)
+	var normal := _button_box(bg)
+	var hover := _button_box(hot)
+	mute_button.add_theme_stylebox_override("normal", normal)
+	mute_button.add_theme_stylebox_override("hover", hover)
+	mute_button.add_theme_stylebox_override("pressed", hover)
+	mute_button.add_theme_stylebox_override("focus", normal)
 
 
 func _overlay(tint: Color) -> Control:

@@ -73,6 +73,7 @@ var ui_blockers: Array = []
 var status_label: Label
 var count_label: Label
 var help_root: Control
+var mute_button: Button
 var block_note := ""
 
 
@@ -1686,7 +1687,44 @@ func _build_ui() -> void:
 	_build_help(root)
 
 	_build_spin_arrows()
+	_build_mute_button()
 	_select(selected_id)
+
+
+func _build_mute_button() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "MuteLayer"
+	layer.layer = 40
+	add_child(layer)
+	var holder := Control.new()
+	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
+	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(holder)
+	mute_button = Button.new()
+	mute_button.name = "MuteButton"
+	mute_button.focus_mode = Control.FOCUS_NONE
+	mute_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	mute_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	mute_button.offset_left = -156
+	mute_button.offset_top = 16
+	mute_button.offset_right = -16
+	mute_button.offset_bottom = 56
+	mute_button.pressed.connect(_toggle_mute)
+	holder.add_child(mute_button)
+	ui_blockers.append(mute_button)
+	_sync_mute_button()
+
+
+func _toggle_mute() -> void:
+	Music.toggle_mute()
+	_sync_mute_button()
+
+
+func _sync_mute_button() -> void:
+	if mute_button == null:
+		return
+	mute_button.text = Music.mute_label()
+	_style_choice(mute_button, Music.muted)
 
 
 func _build_help(parent: Control) -> void:
