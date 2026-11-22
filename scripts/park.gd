@@ -201,11 +201,13 @@ func _refresh_hud() -> void:
 	charge_fill.anchor_right = skater.charge
 	if skater.state == SkaterScript.State.CRASH and not end_layer.visible:
 		_show_end()
+	elif skater.state != SkaterScript.State.CRASH and end_layer.visible:
+		end_layer.hide()
 
 
 func _show_end() -> void:
 	end_layer.show()
-	end_title.text = "BAILED"
+	end_title.text = "WASTED"
 	end_body.text = "%s\n%s\n\nR  —  ride again    Esc  —  builder" % [skater.crash_reason, _comma(skater.points)]
 
 
@@ -263,6 +265,7 @@ func _build_park() -> void:
 		if str(entry.get("id", "")) == "":
 			continue
 		kit.place_item(holder, entry)
+	kit.lift_rails(holder)
 	kit.weld_ramps(holder)
 	ride_grinds = _chain_rails(holder, kit)
 
@@ -306,6 +309,7 @@ func _heading_from_start(items: Array) -> float:
 
 
 func _aim_spawn() -> void:
+	skater.spawn_heading = ride_heading
 	skater.heading = ride_heading
 	skater.cam_forward = Vector3(-sin(ride_heading), 0.0, -cos(ride_heading))
 
@@ -418,6 +422,7 @@ func _build_skater() -> void:
 	cfg.load("user://mini_park.cfg")
 	skater.saved_best = int(cfg.get_value("run", "best", 0))
 	skater.spawn_pos = ride_spawn
+	skater.spawn_heading = ride_heading
 	skater.heading = ride_heading
 	skater.cam_forward = Vector3(-sin(ride_heading), 0.0, -cos(ride_heading))
 	skater.grind_lines = ride_grinds

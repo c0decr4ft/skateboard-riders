@@ -12,11 +12,11 @@ const ZOOM_NEAR := 3.5
 const ZOOM_FAR := 72.0
 const SPIN_SIZE := 48.0
 const SPIN_STEP := 0.36
-# Visible hand is HAND_ICON_H tall. The hit target is a circle of diameter HAND_GRAB.
-const HAND_ICON_H := 44.0
-const HAND_GRAB := 132.0
-const HAND_OUTSET := 16.0
-const HAND_CENTER_GAP := 22.0
+# Visible hand is HAND_ICON_H tall. The hit target stays larger than the icon.
+const HAND_ICON_H := 28.0
+const HAND_GRAB := 96.0
+const HAND_OUTSET := 10.0
+const HAND_CENTER_GAP := 18.0
 
 var layout
 var pieces
@@ -503,6 +503,7 @@ func _load_layout() -> void:
 		if str(entry.get("id", "")) == "":
 			continue
 		_place_saved(entry)
+	pieces.lift_rails(piece_root)
 
 
 func _cell_taken(x: int, z: int) -> bool:
@@ -695,7 +696,7 @@ func _apply_height(node: Node, y: float) -> void:
 	if id == "corner":
 		node.position = Vector3(0.0, y, 0.0)
 	elif id == "start":
-		node.position.y = y + 0.01
+		node.position.y = y - 0.025
 	else:
 		node.position.y = y
 
@@ -1059,9 +1060,7 @@ func _build_spin_arrows() -> void:
 	holder.set_anchors_preset(Control.PRESET_FULL_RECT)
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(holder)
-	spin_ccw = _make_spin_arrow(false, 1)
 	spin_cw = _make_turn_hand()
-	holder.add_child(spin_ccw)
 	holder.add_child(spin_cw)
 
 
@@ -1092,31 +1091,22 @@ func _spin_hover(node: CanvasItem, on: bool) -> void:
 
 
 func _place_spin_arrows() -> void:
-	if spin_ccw == null or spin_cw == null:
+	if spin_cw == null:
 		return
 	var show := ghost != null and is_instance_valid(ghost) and camera != null
 	if show and camera.is_position_behind(ghost.global_position):
 		show = false
 	if show and help_open():
 		show = false
-	spin_ccw.visible = show
 	spin_cw.visible = show
 	if not show:
 		return
 	var rect := _ghost_screen_rect()
 	if rect.size.x < 8.0 and rect.size.y < 8.0:
 		var origin := camera.unproject_position(ghost.global_position + Vector3(0, 0.35, 0))
-		rect = Rect2(origin - Vector2(42, 42), Vector2(84, 84))
-	var tl := rect.position + Vector2(-8, -8)
-	var br := _hand_anchor(rect)
-	var apart := HAND_GRAB * 0.5 + SPIN_SIZE
-	if br.distance_to(tl) < apart:
-		var away := tl - br
-		if away.length_squared() < 9.0:
-			away = Vector2(-1, -1)
-		tl = br + away.normalized() * apart
-	_move_spin(spin_ccw, tl)
-	_move_hand(br)
+		rect = Rect2(origin - Vector2(36, 36), Vector2(72, 72))
+	_move_hand(_hand_anchor(rect))
+	_spin_hand_visual()
 	_tint_hand()
 
 
@@ -1148,7 +1138,7 @@ func _make_turn_hand() -> Control:
 	hand_shadow.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	hand_shadow.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	hand_shadow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hand_shadow.modulate = Color(0.04, 0.03, 0.03, 0.92)
+	hand_shadow.modulate = Color(0.05, 0.04, 0.04, 0.45)
 	grab.add_child(hand_shadow)
 	hand_icon = TextureRect.new()
 	hand_icon.name = "HandIcon"
@@ -1174,8 +1164,8 @@ func _layout_hand_icon() -> void:
 	hand_icon.custom_minimum_size = icon_size
 	if hand_shadow == null:
 		return
-	var shadow_size := icon_size + Vector2(14, 14)
-	hand_shadow.position = (Vector2(HAND_GRAB, HAND_GRAB) - shadow_size) * 0.5 + Vector2(1.0, 2.0)
+	var shadow_size := icon_size + Vector2(6, 6)
+	hand_shadow.position = (Vector2(HAND_GRAB, HAND_GRAB) - shadow_size) * 0.5 + Vector2(1.0, 1.5)
 	hand_shadow.size = shadow_size
 	hand_shadow.custom_minimum_size = shadow_size
 
@@ -1221,12 +1211,25 @@ func _hand_hit(mouse: Vector2) -> bool:
 		return false
 	if _pointer_over_ui(mouse):
 		return false
-	if spin_ccw != null and spin_ccw.visible and spin_ccw.get_global_rect().grow(4.0).has_point(mouse):
-		return false
 	var reach := HAND_GRAB * 0.5
 	if hand_hot or hand_grabbing:
 		reach += 16.0
 	return mouse.distance_to(_hand_center()) <= reach
+
+
+func _spin_hand_visual() -> void:
+	if hand_icon == null:
+		return
+	var angle := 0.0
+	if hand_grabbing:
+		var rel := get_viewport().get_mouse_position() - hand_pivot
+		if rel.length_squared() > 36.0:
+			angle = angle_difference(hand_grab_angle, rel.angle())
+	hand_icon.pivot_offset = hand_icon.size * 0.5
+	hand_icon.rotation = angle
+	if hand_shadow != null:
+		hand_shadow.pivot_offset = hand_shadow.size * 0.5
+		hand_shadow.rotation = angle
 
 
 func _tint_hand() -> void:
@@ -1328,7 +1331,7 @@ func _piece_screen_center() -> Vector2:
 func _load_hand_image() -> Image:
 	var img := Image.new()
 	var path := ProjectSettings.globalize_path("res://assets/ui/turn_hand_src.png")
-	if img.load_from_file(path) != OK or img.is_empty():
+	if img.load(path) != OK or img.is_empty():
 		return _draw_hand_image()
 	img.convert(Image.FORMAT_RGBA8)
 	var bounds := _ink_bounds(img)

@@ -21,9 +21,9 @@ func _run() -> void:
 	skater.spawn_grace = 0.0
 	skater.stick_lock = 0.0
 
-	var straight := kit.place(world, "low-rail", 0, 0, 0, 0.0)
-	var turned := kit.place(world, "low-rail", 0, 1, 90, 0.0)
-	var curve := kit.place(world, "rail-curve", 4, 0, 0, 0.0)
+	var straight: Node3D = kit.place(world, "low-rail", 0, 0, 0, 0.0)
+	var turned: Node3D = kit.place(world, "low-rail", 0, 1, 90, 0.0)
+	var curve: Node3D = kit.place(world, "rail-curve", 4, 0, 0, 0.0)
 	await process_frame
 	var stem: PackedVector3Array = kit.rail_points(straight)
 	var cross: PackedVector3Array = kit.rail_points(turned)
@@ -107,11 +107,11 @@ func _early_ollie(skater: CharacterBody3D, line: PackedVector3Array) -> void:
 	skater._space_was = true
 	skater.airborne = false
 	skater.jump_air = false
-	var before := skater._point_at(line, skater.grind_along)
+	var before: Vector3 = skater._point_at(line, skater.grind_along)
 	var end_z: float = maxf(line[0].z, line[line.size() - 1].z)
 	skater._grind_slide(0.016)
 	var flat := Vector2(skater.velocity.x, skater.velocity.z).length()
-	var left_early := (not skater.grinding) and skater.airborne and skater.velocity.y > 3.0 and flat > 5.0 and absf(skater.global_position.z - end_z) > 0.2 and absf(skater.global_position.z - before.z) < 0.45
+	var left_early: bool = (not skater.grinding) and skater.airborne and skater.velocity.y > 3.0 and flat > 5.0 and absf(skater.global_position.z - end_z) > 0.2 and absf(skater.global_position.z - before.z) < 0.45
 	if left_early and skater.rail_lock > 0.2 and skater.jump_air:
 		_ok("ollie leaves mid-rail with grind speed")
 	else:
@@ -135,10 +135,10 @@ func _early_ollie(skater: CharacterBody3D, line: PackedVector3Array) -> void:
 	skater.board_flip = 0.0
 	skater.flip_v = 0.0
 	skater._grind_slide(0.1)
-	if skater.grinding and absf(skater.board_flip) > 0.2:
-		_ok("trick input works during a grind")
+	if skater.grinding and absf(skater.board_flip) < 0.05 and absf(skater.board_shove) < 0.05:
+		_ok("board stays flat and locked on the rail")
 	else:
-		_bad("grind trick grinding=%s flip=%.2f" % [skater.grinding, skater.board_flip])
+		_bad("grind trick grinding=%s flip=%.2f shove=%.2f" % [skater.grinding, skater.board_flip, skater.board_shove])
 	_release(KEY_Q)
 
 
@@ -191,7 +191,7 @@ func _follow_corner(skater: CharacterBody3D, joined: PackedVector3Array) -> void
 	skater.charge = 0.0
 	skater._space_was = false
 	skater.rail_lock = 0.0
-	var start_heading := skater.heading
+	var start_heading: float = skater.heading
 	var turned := false
 	var bailed := false
 	for _i in range(40):

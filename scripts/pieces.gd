@@ -3,6 +3,8 @@ extends RefCounted
 
 const MODEL := "res://assets/kenney-mini-skate/%s.glb"
 
+var _mesh_tops: Dictionary = {}
+
 
 func build_environment(parent: Node3D) -> void:
 	var env := Environment.new()
@@ -11,8 +13,9 @@ func build_environment(parent: Node3D) -> void:
 	var sky_mat := ProceduralSkyMaterial.new()
 	sky_mat.sky_top_color = Color(0.36, 0.58, 0.86)
 	sky_mat.sky_horizon_color = Color(0.78, 0.84, 0.9)
-	sky_mat.ground_bottom_color = Color(0.45, 0.48, 0.52)
-	sky_mat.ground_horizon_color = Color(0.62, 0.66, 0.7)
+	var lot := _lot_gray()
+	sky_mat.ground_bottom_color = lot
+	sky_mat.ground_horizon_color = lot
 	sky_mat.sun_angle_max = 28.0
 	sky.sky_material = sky_mat
 	env.sky = sky
@@ -48,59 +51,88 @@ func _add_horizon(parent: Node3D) -> void:
 	plane.size = Vector2(480, 480)
 	deck.mesh = plane
 	var dirt := StandardMaterial3D.new()
-	dirt.albedo_color = Color(0.58, 0.59, 0.61)
+	dirt.albedo_color = _lot_gray()
 	dirt.roughness = 1.0
 	deck.material_override = dirt
-	deck.position = Vector3(-0.5, -0.03, 1.0)
+	deck.position = Vector3(-0.5, -0.02, 1.0)
 	deck.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(deck)
 	_add_city(parent)
 
 
+func _lot_gray() -> Color:
+	# Same sample as the concrete tile atlas, so the lot is not a second color.
+	return Color(0.451, 0.435, 0.553)
+
+
 func _add_city(parent: Node3D) -> void:
-	# Layers from FREE Background City, far to near: sky, trees, then three skylines.
-	var layers: Array[Dictionary] = [
-		{"file": "background_00.png", "radius": 220.0, "width": 500.0, "height": 220.0, "y": 90.0},
-		{"file": "background_01.png", "radius": 180.0, "width": 420.0, "height": 64.0, "y": 26.0},
-		{"file": "background_02.png", "radius": 154.0, "width": 370.0, "height": 58.0, "y": 24.0},
-		{"file": "background_03.png", "radius": 132.0, "width": 330.0, "height": 56.0, "y": 22.0},
-		{"file": "background_04.png", "radius": 112.0, "width": 290.0, "height": 46.0, "y": 18.0},
+	# Each file is one 4:1 panorama. A ring keeps the skyline continuous
+	# instead of four copies meeting at corners. The painted blue band is buried.
+	var center := Vector3(-0.5, 0.0, 1.0)
+	var files: Array[String] = [
+		"background_00.png",
+		"background_01.png",
+		"background_02.png",
+		"background_03.png",
+		"background_04.png",
 	]
-	var yaws: Array[float] = [0.0, -PI * 0.5, PI, PI * 0.5]
-	for layer_i in range(layers.size()):
-		var spec: Dictionary = layers[layer_i]
-		var tex: Texture2D = load("res://assets/background/%s" % str(spec["file"])) as Texture2D
+	var radii: Array[float] = [150.0, 128.0, 108.0, 90.0, 76.0]
+	for layer_i in range(files.size()):
+		var tex: Texture2D = load("res://assets/background/%s" % files[layer_i]) as Texture2D
 		if tex == null:
-			push_error("Missing city layer %s" % str(spec["file"]))
+			push_error("Missing city layer %s" % files[layer_i])
 			continue
 		var mat := StandardMaterial3D.new()
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-		mat.alpha_scissor_threshold = 0.15
+		mat.alpha_scissor_threshold = 0.02
 		mat.albedo_texture = tex
 		mat.albedo_color = Color.WHITE
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-		var mesh := QuadMesh.new()
-		mesh.size = Vector2(float(spec["width"]), float(spec["height"]))
-		var radius: float = float(spec["radius"])
-		var height: float = float(spec["y"])
-		var spots: Array[Vector3] = [
-			Vector3(-0.5, height, -radius),
-			Vector3(radius, height, 1.0),
-			Vector3(-0.5, height, radius),
-			Vector3(-radius, height, 1.0),
-		]
-		for side in range(spots.size()):
-			var plate := MeshInstance3D.new()
-			plate.name = "CityBackdrop%d_%d" % [layer_i, side]
-			plate.mesh = mesh
-			plate.material_override = mat
-			plate.position = spots[side]
-			plate.rotation.y = yaws[side]
-			plate.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			plate.extra_cull_margin = 200.0
-			parent.add_child(plate)
+		mat.render_priority = layer_i
+		var ring := MeshInstance3D.new()
+		ring.name = "CityBackdrop%d" % layer_i
+		ring.mesh = _city_ring(radii[layer_i])
+		ring.material_override = mat
+		ring.position = center
+		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		ring.extra_cull_margin = 400.0
+		parent.add_child(ring)
+
+
+func _city_ring(radius: float) -> ArrayMesh:
+	var segments := 48
+	var circ := TAU * radius
+	var height := circ / 4.0
+	var sink := height * 0.42
+	var y0 := -sink
+	var y1 := height - sink
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in segments:
+		var a0 := TAU * float(i) / float(segments)
+		var a1 := TAU * float(i + 1) / float(segments)
+		var u0 := float(i) / float(segments)
+		var u1 := float(i + 1) / float(segments)
+		var p0 := Vector3(sin(a0) * radius, 0.0, cos(a0) * radius)
+		var p1 := Vector3(sin(a1) * radius, 0.0, cos(a1) * radius)
+		var b0 := p0 + Vector3(0.0, y0, 0.0)
+		var t0 := p0 + Vector3(0.0, y1, 0.0)
+		var b1 := p1 + Vector3(0.0, y0, 0.0)
+		var t1 := p1 + Vector3(0.0, y1, 0.0)
+		_city_vert(tool, b0, Vector2(u0, 1.0))
+		_city_vert(tool, t0, Vector2(u0, 0.0))
+		_city_vert(tool, t1, Vector2(u1, 0.0))
+		_city_vert(tool, b0, Vector2(u0, 1.0))
+		_city_vert(tool, t1, Vector2(u1, 0.0))
+		_city_vert(tool, b1, Vector2(u1, 1.0))
+	return tool.commit()
+
+
+func _city_vert(tool: SurfaceTool, point: Vector3, uv: Vector2) -> void:
+	tool.set_uv(uv)
+	tool.add_vertex(point)
 
 
 func _add_play_line(parent: Node3D) -> void:
@@ -113,15 +145,15 @@ func _add_play_line(parent: Node3D) -> void:
 	var thin := 0.045
 	var span_x := x_max - x_min
 	var span_z := z_max - z_min
-	_red_strip(parent, Vector3((x_min + x_max) * 0.5, y, z_min), Vector3(span_x, 0.015, thin))
-	_red_strip(parent, Vector3((x_min + x_max) * 0.5, y, z_max), Vector3(span_x, 0.015, thin))
-	_red_strip(parent, Vector3(x_min, y, (z_min + z_max) * 0.5), Vector3(thin, 0.015, span_z))
-	_red_strip(parent, Vector3(x_max, y, (z_min + z_max) * 0.5), Vector3(thin, 0.015, span_z))
+	_red_strip(parent, "PlayLine0", Vector3((x_min + x_max) * 0.5, y, z_min), Vector3(span_x, 0.015, thin))
+	_red_strip(parent, "PlayLine1", Vector3((x_min + x_max) * 0.5, y, z_max), Vector3(span_x, 0.015, thin))
+	_red_strip(parent, "PlayLine2", Vector3(x_min, y, (z_min + z_max) * 0.5), Vector3(thin, 0.015, span_z))
+	_red_strip(parent, "PlayLine3", Vector3(x_max, y, (z_min + z_max) * 0.5), Vector3(thin, 0.015, span_z))
 
 
-func _red_strip(parent: Node3D, at: Vector3, size: Vector3) -> void:
+func _red_strip(parent: Node3D, strip_name: String, at: Vector3, size: Vector3) -> void:
 	var mesh_node := MeshInstance3D.new()
-	mesh_node.name = "PlayLine"
+	mesh_node.name = strip_name
 	var box := BoxMesh.new()
 	box.size = size
 	mesh_node.mesh = box
@@ -138,10 +170,11 @@ func build_pad(parent: Node3D) -> void:
 	var ground := StaticBody3D.new()
 	ground.name = "Ground"
 	var shape := BoxShape3D.new()
-	shape.size = Vector3(56, 1, 49)
+	# Top stays on the ride surface. The slab is thick so a ragdoll cannot tunnel through.
+	shape.size = Vector3(56, 4, 49)
 	var col := CollisionShape3D.new()
 	col.shape = shape
-	col.position = Vector3(-0.5, -0.5, 1)
+	col.position = Vector3(-0.5, -2.0, 1)
 	ground.add_child(col)
 	parent.add_child(ground)
 
@@ -163,9 +196,10 @@ func build_pad(parent: Node3D) -> void:
 	var z1 := 26
 	multi.instance_count = (x1 - x0) * (z1 - z0)
 	var index := 0
+	var tile_basis := Basis().scaled(Vector3(1.012, 1.0, 1.012))
 	for x in range(x0, x1):
 		for z in range(z0, z1):
-			multi.set_instance_transform(index, Transform3D(Basis(), Vector3(x, 0, z)))
+			multi.set_instance_transform(index, Transform3D(tile_basis, Vector3(x, 0, z)))
 			index += 1
 	var tiles := MultiMeshInstance3D.new()
 	tiles.name = "Concrete"
@@ -244,7 +278,7 @@ func stack_block(ids: Array) -> String:
 		return ""
 	if ids.size() >= 4:
 		return "Stack limit is 4"
-	if str(ids[ids.size() - 1]) != "floor-concrete":
+	if not _stack_support(str(ids[ids.size() - 1])):
 		return "Only on concrete"
 	return ""
 
@@ -287,7 +321,7 @@ func keep_stacks(items: Array) -> Array:
 				break
 			if not kept.is_empty():
 				var below: Dictionary = kept[kept.size() - 1]
-				if str(below.get("id", "")) != "floor-concrete":
+				if not _stack_support(str(below.get("id", ""))):
 					break
 			kept.append(entry)
 		for item in kept:
@@ -295,7 +329,15 @@ func keep_stacks(items: Array) -> Array:
 	return out
 
 
+func _stack_support(id: String) -> bool:
+	return id == "floor-concrete" or id == "obstacle-box" or id == "obstacle-box-grind" or id == "ledge"
+
+
 func piece_height(id: String) -> float:
+	if id == "obstacle-box" or id == "obstacle-box-grind" or id == "ledge":
+		var top := _mesh_top(_model_name(id))
+		if top > 0.05:
+			return top
 	match id:
 		"quarter", "corner", "bank", "bowl-side", "bowl-corner-inner", "bowl-corner-outer":
 			return 0.8
@@ -326,7 +368,7 @@ func piece_height(id: String) -> float:
 		"floor-concrete":
 			return 0.2
 		"plank", "start":
-			return 0.05
+			return 0.025
 		"scooter":
 			return 0.5
 		"vehicle":
@@ -355,7 +397,19 @@ func catalog() -> Array:
 			file_name = dir.get_next()
 		dir.list_dir_end()
 	files.sort()
-	var lead: Array[String] = ["half-pipe", "slope-smooth", "ramp", "rail-low", "rail-high", "obstacle-middle", "floor-wood"]
+	var lead: Array[String] = [
+		"floor-wood", "floor-concrete",
+		"half-pipe", "half-pipe-low", "slope-smooth", "ramp", "ramp-rail",
+		"bowl-side", "bowl-side-low", "bowl-corner-inner", "bowl-corner-outer",
+		"bowl-corner-inner-low", "bowl-corner-outer-low", "bowl-platform",
+		"steps", "steps-rail",
+		"rail-low", "rail-low-end", "rail-high", "rail-curve", "rail-high-curve",
+		"rail-slope", "rail-slope-smooth",
+		"obstacle-box", "obstacle-box-grind", "obstacle-middle", "obstacle-middle-rail",
+		"obstacle-end", "obstacle-corner",
+		"structure-wood", "structure-wood-platform", "structure-platform",
+		"fence", "bench", "benches", "pallet", "plank", "scooter", "vehicle",
+	]
 	var ordered: Array[String] = []
 	for base in lead:
 		if files.has(base):
@@ -480,11 +534,93 @@ func _label_for_model(base: String) -> String:
 func _collide_piece(body: StaticBody3D, id: String) -> void:
 	body.collision_layer = 1
 	body.collision_mask = 1
+	if id == "floor-concrete":
+		_concrete_block(body)
+		return
+	if id == "start":
+		_start_pad_box(body)
+		return
 	# The solid is the mesh the player sees. A bounding box leaves an invisible wall
 	# in the air above a slope, and a rail on the stairs turns the whole stair into a cube.
 	if _collide_visual(body):
 		return
 	_prop_box(body, piece_height(id))
+
+
+func _concrete_block(body: StaticBody3D) -> void:
+	# A placed tile is a low block. The textured sheet sits on the top face.
+	var h := piece_height("floor-concrete")
+	for child in body.get_children():
+		if child is Node3D and not (child is CollisionShape3D):
+			(child as Node3D).position.y = h
+	var mesh_node := MeshInstance3D.new()
+	mesh_node.name = "ConcreteBlock"
+	var box := BoxMesh.new()
+	box.size = Vector3(1.0, maxf(h - 0.02, 0.05), 1.0)
+	mesh_node.mesh = box
+	mesh_node.position = Vector3(0.0, box.size.y * 0.5, 0.0)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = _lot_gray()
+	mat.roughness = 0.92
+	mesh_node.material_override = mat
+	body.add_child(mesh_node)
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(1.0, h, 1.0)
+	var col := CollisionShape3D.new()
+	col.name = "Block"
+	col.shape = shape
+	col.position = Vector3(0.0, h * 0.5, 0.0)
+	body.add_child(col)
+
+
+func _mesh_top(model_name: String) -> float:
+	if model_name == "":
+		return 0.0
+	if _mesh_tops.has(model_name):
+		return float(_mesh_tops[model_name])
+	var top := 0.0
+	var packed: PackedScene = load(MODEL % model_name) as PackedScene
+	if packed != null:
+		var node: Node = packed.instantiate()
+		var pts := PackedVector3Array()
+		_gather_mesh_points(node, Transform3D.IDENTITY, pts, false)
+		for p in pts:
+			top = maxf(top, p.y)
+		node.free()
+	_mesh_tops[model_name] = top
+	return top
+
+
+func lift_rails(root: Node) -> void:
+	# A rail saved at the deck's origin is inside the block. Seat it on the top.
+	var bodies: Array = []
+	for child in root.get_children():
+		if child is Node3D and child.has_meta("piece_id"):
+			bodies.append(child)
+	for item in bodies:
+		var body: Node3D = item
+		var id := str(body.get_meta("piece_id"))
+		if not id.contains("rail"):
+			continue
+		var x := int(body.get_meta("cell_x"))
+		var z := int(body.get_meta("cell_z"))
+		var y := float(body.get_meta("stack_y", body.position.y))
+		var support := 0.0
+		for other_item in bodies:
+			var other: Node3D = other_item
+			if other == body:
+				continue
+			if int(other.get_meta("cell_x")) != x or int(other.get_meta("cell_z")) != z:
+				continue
+			var oy := float(other.get_meta("stack_y", other.position.y))
+			if oy > y + 0.02:
+				continue
+			var top := oy + piece_height(str(other.get_meta("piece_id")))
+			support = maxf(support, top)
+		if y + 0.02 >= support:
+			continue
+		body.position.y = support
+		body.set_meta("stack_y", support)
 
 
 func _collide_visual(body: StaticBody3D) -> bool:
@@ -808,7 +944,8 @@ func place(parent: Node3D, id: String, x: int, z: int, rot: int, stack_y: float 
 	var deg := posmod(rot, 360)
 	if id == "start":
 		var pad := StaticBody3D.new()
-		_stamp(pad, id, x, z, deg, stack_y + 0.01)
+		# Wood is 2.5 cm thick. Sink it so the top is flush with the floor, not a lip.
+		_stamp(pad, id, x, z, deg, stack_y - 0.025)
 		pad.set_meta("stack_y", stack_y)
 		parent.add_child(pad)
 		_add_model(pad, "floor-wood")

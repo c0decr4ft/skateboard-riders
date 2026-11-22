@@ -22,7 +22,7 @@ func _run() -> void:
 			rocks += 1
 		if child_name.begins_with("CityBackdrop"):
 			city += 1
-		if child_name == "PlayLine":
+		if child_name.begins_with("PlayLine"):
 			lines += 1
 		if child_name == "HorizonGround" and child is MeshInstance3D:
 			var mat := (child as MeshInstance3D).material_override as StandardMaterial3D

@@ -5,10 +5,12 @@ enum State { WAIT, RIDE, CRASH }
 
 const GRAVITY := 22.0
 const MAX_SPEED := 11.0
+const PUSH_TOP := 18.0
 const CRUISE := 6.4
 
 var state: State = State.WAIT
 var spawn_pos := Vector3(0, 0.3, 4)
+var spawn_heading := 0.0
 var heading := 0.0
 var speed := 0.0
 var charge := 0.0
@@ -80,10 +82,14 @@ var slide_along := 0.0
 var slide_sign := 1.0
 var slide_lock := 0.0
 var slide_travel := 0.0
+var push_hold := 0.0
+var ragdoll: RigidBody3D
+var crash_time := 0.0
+var _shift_down := false
 
 
 func _ready() -> void:
-	floor_max_angle = deg_to_rad(68.0)
+	floor_max_angle = deg_to_rad(74.0)
 	floor_snap_length = 0.4
 	floor_stop_on_slope = false
 	floor_block_on_wall = false
@@ -91,11 +97,39 @@ func _ready() -> void:
 	safe_margin = 0.05
 	collision_layer = 1
 	collision_mask = 1
+	_ensure_slide_action()
 	_build_body()
 	_build_visual()
 
 
+func _input(event: InputEvent) -> void:
+	if not (event is InputEventKey):
+		return
+	var key := event as InputEventKey
+	if key.keycode == KEY_SHIFT or key.physical_keycode == KEY_SHIFT:
+		_shift_down = key.pressed
+
+
+func _ensure_slide_action() -> void:
+	if not InputMap.has_action("slide"):
+		InputMap.add_action("slide")
+	var event := InputEventKey.new()
+	event.keycode = KEY_SHIFT
+	event.physical_keycode = KEY_SHIFT
+	if not InputMap.action_has_event("slide", event):
+		InputMap.action_add_event("slide", event)
+
+
+func _shift_held() -> bool:
+	if _shift_down:
+		return true
+	if InputMap.has_action("slide") and Input.is_action_pressed("slide"):
+		return true
+	return Input.is_key_pressed(KEY_SHIFT) or Input.is_physical_key_pressed(KEY_SHIFT)
+
+
 func begin() -> void:
+	_end_ragdoll()
 	state = State.RIDE
 	grinding = false
 	grind_index = -1
@@ -127,8 +161,9 @@ func reset_run() -> void:
 	live_trick = ""
 	crash_reason = ""
 	crash_spin = 0.0
+	crash_time = 0.0
 	charge = 0.0
-	heading = 0.0
+	heading = spawn_heading
 	stick_lock = 0.0
 	pop_t = 0.0
 	global_position = spawn_pos
@@ -149,10 +184,11 @@ func crash(reason: String) -> void:
 	crash_spin = 0.0
 	combo = 0
 	line_mult = 1.0
-	banner = reason
+	banner = "WASTED"
 	banner_ttl = 3.0
 	speed = minf(speed, 1.5)
 	_write_best()
+	_begin_ragdoll()
 
 
 func _physics_process(delta: float) -> void:
@@ -170,13 +206,13 @@ func _physics_process(delta: float) -> void:
 		return
 	if state == State.CRASH:
 		crash_spin += delta
-		velocity += Vector3.DOWN * GRAVITY * delta
-		velocity.x = move_toward(velocity.x, 0.0, 8.0 * delta)
-		velocity.z = move_toward(velocity.z, 0.0, 8.0 * delta)
-		move_and_slide()
+		crash_time += delta
+		_step_ragdoll(delta)
 		_update_facing(delta)
 		_update_anim()
 		_refresh_numbers()
+		if crash_time >= 3.0:
+			reset_run()
 		return
 
 	if sliding:
@@ -197,9 +233,11 @@ func _physics_process(delta: float) -> void:
 		return
 
 	_jumped = false
+	# Only the real floor counts. Treating "still low in the air" as ground
+	# made the top of a quarter flicker between riding and launching.
 	var grounded: bool = (not airborne) and is_on_floor() and stick_lock <= 0.0
-	var low: bool = (not airborne) and stick_lock <= 0.0 and global_position.y < 1.6 and velocity.y <= 0.6
-	if grounded or low:
+	floor_snap_length = 0.28 if last_normal.y > 0.4 else 0.0
+	if grounded:
 		_ground_physics(delta)
 	else:
 		if not airborne:
@@ -209,6 +247,7 @@ func _physics_process(delta: float) -> void:
 		_air_physics(delta)
 
 	move_and_slide()
+	_release_steep_face()
 
 	if state == State.RIDE and spawn_grace <= 0.0 and _try_start_slide():
 		_finish_ride_frame(delta)
@@ -240,24 +279,79 @@ func _physics_process(delta: float) -> void:
 	_finish_ride_frame(delta)
 
 
+func _speed_cap() -> float:
+	return lerpf(MAX_SPEED, PUSH_TOP, clampf(push_hold / 1.25, 0.0, 1.0))
+
+
+func _release_steep_face() -> void:
+	# The top of a quarter is a wall. Hitting it every frame is the buzz.
+	# Leave it once, then stay off it long enough to not stick again.
+	if state != State.RIDE or grinding or sliding or stick_lock > 0.0:
+		return
+	var push := Vector3.ZERO
+	var steep := false
+	for i in get_slide_collision_count():
+		var n := get_slide_collision(i).get_normal()
+		if n.y >= 0.34:
+			continue
+		steep = true
+		var flat := Vector3(n.x, 0.0, n.z)
+		if flat.length_squared() > 0.01:
+			push += flat.normalized()
+	if not steep:
+		return
+	if push.length_squared() > 0.01:
+		push = push.normalized()
+	var carry := maxf(speed, 4.0)
+	velocity = push * (carry * 0.45) + Vector3.UP * (1.6 + carry * 0.1)
+	var flat_vel := Vector3(velocity.x, 0.0, velocity.z)
+	if flat_vel.length_squared() > 0.04:
+		heading = atan2(-flat_vel.x, -flat_vel.z)
+	speed = minf(carry, _speed_cap())
+	airborne = true
+	stick_lock = 0.32
+
+
 func _ground_physics(delta: float) -> void:
 	var n := get_floor_normal()
 	if n.length_squared() < 0.01:
 		n = Vector3.UP
 	last_normal = n
 	var steer := _steer_axis()
+	var slope := 1.0 - clampf(n.y, 0.0, 1.0)
 	var rate := lerpf(3.2, 1.0, clampf(speed / 9.0, 0.0, 1.0))
+	if slope > 0.08:
+		rate = lerpf(4.6, 2.6, clampf(speed / 11.0, 0.0, 1.0))
 	heading += steer * rate * delta
 	var fwd := _forward_on(n)
 	var tangent := Vector3.DOWN * GRAVITY
 	tangent = tangent - n * tangent.dot(n)
-	speed += tangent.dot(fwd) * delta
+	var along := tangent.dot(fwd)
 	var pushing := Input.is_physical_key_pressed(KEY_W)
 	var braking := Input.is_physical_key_pressed(KEY_S)
 	if pushing and not braking:
-		var push := lerpf(9.0, 0.85, clampf(speed / CRUISE, 0.0, 1.0))
-		speed += push * delta
+		push_hold = minf(push_hold + delta, 1.6)
+	else:
+		push_hold = maxf(push_hold - delta * 0.7, 0.0)
+	var effort := clampf(push_hold / 1.25, 0.0, 1.0)
+	if pushing and not braking:
+		var push_cap := lerpf(CRUISE + 1.5, PUSH_TOP, effort)
+		var push := lerpf(11.0, 18.0, effort)
+		if speed < push_cap:
+			speed += push * delta
 	var friction := 0.7 + speed * 0.045
+	if pushing and not braking:
+		friction *= lerpf(1.0, 0.2, effort)
+	if slope > 0.08:
+		# Flats keep their friction. On a bank, carving should hold speed.
+		var downhill := maxf(along, 0.0)
+		var uphill := minf(along, 0.0)
+		speed += downhill * 1.65 * delta
+		speed += uphill * 0.32 * delta
+		speed += absf(steer) * slope * 8.0 * delta
+		friction = 0.15
+	else:
+		speed += along * delta
 	if braking:
 		friction = 13.0
 	var before_friction := speed
@@ -271,7 +365,10 @@ func _ground_physics(delta: float) -> void:
 			fwd = _forward_on(n)
 		else:
 			speed = 0.0
-	speed = clampf(speed, 0.0, MAX_SPEED)
+	var cap := _speed_cap()
+	if slope > 0.08:
+		cap += 2.0
+	speed = clampf(speed, 0.0, cap)
 	velocity = fwd * speed - n * 0.35
 	var space := Input.is_physical_key_pressed(KEY_SPACE)
 	if space:
@@ -359,6 +456,9 @@ func _resolve_landing(hung: float) -> void:
 
 
 func _score_air(hung: float) -> void:
+	if _period_error(board_flip, TAU) > 1.0 or _period_error(board_shove, PI) > 0.9:
+		crash("WASTED")
+		return
 	var names := PackedStringArray()
 	if board_flip > 4.8:
 		names.append("Kickflip")
@@ -368,9 +468,6 @@ func _score_air(hung: float) -> void:
 		names.append("Shove-it")
 	if absf(visual_yaw) > 2.3:
 		names.append("180")
-	if names.size() > 0 and _period_error(board_flip, TAU) > 1.2:
-		crash("Missed the landing")
-		return
 	if names.is_empty():
 		if hung > 0.35:
 			_add_score(int(hung * 40.0), "Ollie", false)
@@ -402,7 +499,7 @@ func _match_speed() -> void:
 		if fn.length_squared() > 0.1:
 			n = fn
 	var tangential := velocity - n * velocity.dot(n)
-	speed = clampf(tangential.length(), 0.0, MAX_SPEED)
+	speed = clampf(tangential.length(), 0.0, _speed_cap())
 	var flat := Vector3(tangential.x, 0.0, tangential.z)
 	if flat.length() > 0.45:
 		heading = atan2(-flat.x, -flat.z)
@@ -568,8 +665,9 @@ func _update_facing(delta: float) -> void:
 	cam_right = x_axis
 	var travel := Basis(x_axis, y_axis, z_axis)
 	if state == State.CRASH:
-		var t := clampf(crash_spin, 0.0, 1.0)
-		visual.basis = travel * Basis.from_euler(Vector3(0.8 * t, visual_yaw, 1.2 * t))
+		if ragdoll == null:
+			var t := clampf(crash_spin, 0.0, 1.0)
+			visual.basis = travel * Basis.from_euler(Vector3(0.8 * t, visual_yaw, 1.2 * t))
 		return
 	if not airborne and not grinding and not sliding and land_blend > 0.0:
 		visual_yaw = _ease_period(visual_yaw, TAU, delta, 7.0)
@@ -593,6 +691,11 @@ func _update_facing(delta: float) -> void:
 	var face_yaw: float = visual_yaw
 	if grinding or sliding:
 		face_yaw += PI * 0.5
+		if grinding:
+			board_flip = 0.0
+			board_shove = 0.0
+			visual_yaw = 0.0
+			face_yaw = PI * 0.5
 	visual.basis = travel * Basis.from_euler(Vector3(style, face_yaw, lean))
 	if board_pivot:
 		board_pivot.rotation = Vector3(0.0, board_shove, board_flip)
@@ -698,6 +801,97 @@ func _roll_axis() -> float:
 	return v
 
 
+func _lock_board() -> void:
+	board_flip = 0.0
+	board_shove = 0.0
+	visual_yaw = 0.0
+	flip_v = 0.0
+	shove_v = 0.0
+	spin_v = 0.0
+
+
+func _above_solid(point: Vector3) -> Vector3:
+	var world := get_world_3d()
+	if world == null:
+		return point
+	var from := point + Vector3.UP * 2.2
+	var to := point + Vector3.DOWN * 0.35
+	var query := PhysicsRayQueryParameters3D.create(from, to)
+	query.collision_mask = 1
+	query.exclude = [self]
+	var hit := world.direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return point
+	var top: float = (hit["position"] as Vector3).y
+	if top > point.y + 0.12:
+		point.y = top + 0.08
+	return point
+
+
+func _begin_ragdoll() -> void:
+	if ragdoll != null:
+		return
+	var body := RigidBody3D.new()
+	body.name = "Ragdoll"
+	body.collision_layer = 1
+	body.collision_mask = 1
+	body.mass = 16.0
+	body.gravity_scale = 1.0
+	body.linear_damp = 0.45
+	body.angular_damp = 1.8
+	body.can_sleep = true
+	body.continuous_cd = true
+	var phys := PhysicsMaterial.new()
+	phys.friction = 1.1
+	phys.bounce = 0.0
+	body.physics_material_override = phys
+	var shape := CapsuleShape3D.new()
+	shape.radius = 0.2
+	shape.height = 0.8
+	var col := CollisionShape3D.new()
+	col.shape = shape
+	col.position = Vector3(0.0, 0.42, 0.0)
+	body.add_child(col)
+	var parent := get_parent()
+	if parent == null:
+		return
+	parent.add_child(body)
+	body.global_position = global_position + Vector3.UP * 0.15
+	body.linear_velocity = velocity
+	body.angular_velocity = Vector3(1.5, 0.4, -1.6)
+	if visual != null:
+		visual.reparent(body, true)
+	collision_layer = 0
+	collision_mask = 0
+	velocity = Vector3.ZERO
+	ragdoll = body
+	crash_time = 0.0
+
+
+func _step_ragdoll(_delta: float) -> void:
+	if ragdoll == null or not is_instance_valid(ragdoll):
+		return
+	if ragdoll.global_position.y < -0.2:
+		ragdoll.global_position = Vector3(ragdoll.global_position.x, 0.4, ragdoll.global_position.z)
+		var vel := ragdoll.linear_velocity
+		vel.y = 0.0
+		ragdoll.linear_velocity = vel
+	global_position = ragdoll.global_position
+	velocity = ragdoll.linear_velocity
+
+
+func _end_ragdoll() -> void:
+	collision_layer = 1
+	collision_mask = 1
+	if visual != null and is_instance_valid(visual) and visual.get_parent() != self:
+		visual.reparent(self, false)
+		visual.position = Vector3.ZERO
+		visual.rotation = Vector3.ZERO
+	if ragdoll != null and is_instance_valid(ragdoll):
+		ragdoll.queue_free()
+	ragdoll = null
+
+
 func _build_body() -> void:
 	var shape := CapsuleShape3D.new()
 	shape.radius = 0.13
@@ -795,7 +989,7 @@ func _try_start_grind() -> bool:
 	if flat.length() < 0.35:
 		flat = Vector3(-sin(heading), 0.0, -cos(heading))
 	grind_sign = -1.0 if flat.dot(best_tangent) < 0.0 else 1.0
-	speed = clampf(maxf(speed, flat.length()), 2.2, MAX_SPEED)
+	speed = clampf(maxf(speed, flat.length()), 2.2, _speed_cap())
 	airborne = false
 	jump_air = false
 	air_time = 0.0
@@ -808,7 +1002,8 @@ func _try_start_grind() -> bool:
 	flip_v = 0.0
 	shove_v = 0.0
 	land_blend = 0.0
-	global_position = best_point
+	_lock_board()
+	global_position = _above_solid(best_point)
 	live_trick = "Grind"
 	return true
 
@@ -828,8 +1023,8 @@ func _grind_slide(delta: float) -> void:
 		speed += 4.0 * delta
 	if Input.is_physical_key_pressed(KEY_S):
 		speed -= 7.0 * delta
-	speed = clampf(speed, 1.6, MAX_SPEED)
-	_apply_air_tricks(delta)
+	speed = clampf(speed, 1.6, _speed_cap())
+	_lock_board()
 	var space := Input.is_physical_key_pressed(KEY_SPACE)
 	if space:
 		charge = minf(charge + delta / 0.42, 1.0)
@@ -854,7 +1049,7 @@ func _grind_slide(delta: float) -> void:
 	else:
 		grind_along = next_along
 	var tangent := _travel_tangent()
-	global_position = _point_at(grind_line, grind_along)
+	global_position = _above_solid(_point_at(grind_line, grind_along))
 	velocity = tangent * speed
 	heading = atan2(-tangent.x, -tangent.z)
 	airborne = false
@@ -1078,8 +1273,12 @@ func _collect_slide_lines() -> void:
 
 
 func _slide_local_edges(id: String) -> Array:
-	if id == "floor-concrete" or id == "obstacle-box" or id == "ledge":
-		return _box_top_edges(0.5, 0.5, 0.4)
+	if id == "floor-concrete":
+		return _box_top_edges(0.5, 0.5, 0.2)
+	if id == "obstacle-box":
+		return _box_top_edges(0.5, 0.5, 0.22)
+	if id == "ledge":
+		return _box_top_edges(0.5, 0.5, 0.3)
 	if id == "obstacle-box-grind":
 		return _box_top_edges(0.26, 0.5, 0.4)
 	var lip := _ramp_lip_edge(id)
@@ -1102,11 +1301,12 @@ func _ramp_lip_edge(id: String) -> PackedVector3Array:
 	var z := -0.5
 	match id:
 		"quarter", "bowl-side", "bowl-corner-inner", "bowl-corner-outer":
-			y = 0.8
-			z = -0.5
+			# Just outside the coping, so the slide is not inside the mesh.
+			y = 0.94
+			z = -0.72
 		"half-pipe-low", "bowl-side-low", "bowl-corner-inner-low", "bowl-corner-outer-low":
-			y = 0.4
-			z = -0.5
+			y = 0.52
+			z = -0.72
 		"bank", "rail-slope-smooth":
 			y = 0.8
 			z = -1.0
@@ -1124,7 +1324,7 @@ func _try_start_slide() -> bool:
 		return false
 	if not airborne or not jump_air:
 		return false
-	if not Input.is_physical_key_pressed(KEY_SHIFT):
+	if not _shift_held():
 		return false
 	if slide_lines.is_empty():
 		_collect_slide_lines()
@@ -1173,7 +1373,7 @@ func _try_start_slide() -> bool:
 	slide_along = best_along
 	slide_travel = 0.0
 	slide_sign = -1.0 if flat.dot(best_tangent) < 0.0 else 1.0
-	speed = clampf(maxf(speed, flat.length()), 2.2, MAX_SPEED)
+	speed = clampf(maxf(speed, flat.length()), 2.2, _speed_cap())
 	airborne = false
 	jump_air = false
 	air_time = 0.0
@@ -1190,10 +1390,10 @@ func _edge_slide(delta: float) -> void:
 	if slide_line.size() < 2:
 		_leave_slide()
 		return
-	if not Input.is_physical_key_pressed(KEY_SHIFT):
+	if not _shift_held():
 		_leave_slide()
 		return
-	speed = clampf(speed, 2.2, MAX_SPEED)
+	speed = clampf(speed, 2.2, _speed_cap())
 	var length := _line_length(slide_line)
 	var step := slide_sign * speed * delta
 	var next_along := slide_along + step
